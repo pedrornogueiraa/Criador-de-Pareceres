@@ -33,22 +33,13 @@ CORS(app, supports_credentials=True)
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        if not session.get("autenticado"):
+        if not session.get('autenticado'):
             return jsonify({"erro": "Nao autenticado."}), 401
         return f(*args, **kwargs)
     return decorated
 
 # Caminho do template base (deve estar na mesma pasta que app.py)
 TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'template.docx')
-
-
-def login_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not session.get('autenticado'):
-            return jsonify({"erro": "Nao autenticado."}), 401
-        return f(*args, **kwargs)
-    return decorated
 
 
 @app.route("/api/login", methods=["POST"])
