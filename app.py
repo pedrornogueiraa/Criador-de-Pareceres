@@ -127,39 +127,46 @@ def gerar_parecer():
         # 2. Substitui dados da capa
         _substituir_dados_doc(doc, dados_caso)
 
-        # 3. Encontra o ponto de inserção dos tópicos
-        #    Estratégia: insere após o último parágrafo com estilo dTTULONVEL2 que vier
-        #    depois do primeiro cTTULONVEL1, e antes do próximo cTTULONVEL1 ("Do cálculo")
+        # 3. Encontra o placeholder [inserir primeira impugnação] e o ponto de inserção dos demais
+        placeholder_elem = _encontrar_placeholder_primeira_impugnacao(doc)
         ponto_insercao = _encontrar_ponto_insercao(doc)
 
         # 4. Baixa e insere cada tópico na posição correta
         body = doc.element.body
-        ref_element = ponto_insercao  # insere antes deste elemento
 
         for i, topico in enumerate(topicos_selecionados):
             docx_topico = _baixar_docx(dbx, topico["path"])
 
-            # Opcional: adiciona parágrafo separador entre tópicos
-            if i > 0:
+            if i == 0 and placeholder_elem is not None:
+                # Primeira impugnação: substitui o parágrafo placeholder
+                ref_element = placeholder_elem
+                for elem in docx_topico.element.body:
+                    if elem.tag == qn("w:sectPr"):
+                        continue
+                    novo = copy.deepcopy(elem)
+                    _substituir_dados_xml(novo, dados_caso)
+                    ref_element.addprevious(novo)
+                # Remove o parágrafo placeholder
+                ref_element.getparent().remove(ref_element)
+            else:
+                # Demais impugnações: insere antes do segundo cTTULONVEL1
+                ref_element = ponto_insercao
                 sep = _criar_paragrafo_vazio()
                 ref_element.addprevious(sep)
-
-            # Copia todos os elementos do tópico (exceto sectPr)
-            for elem in docx_topico.element.body:
-                if elem.tag == qn("w:sectPr"):
-                    continue
-                novo = copy.deepcopy(elem)
-                _substituir_dados_xml(novo, dados_caso)
-                ref_element.addprevious(novo)
+                for elem in docx_topico.element.body:
+                    if elem.tag == qn("w:sectPr"):
+                        continue
+                    novo = copy.deepcopy(elem)
+                    _substituir_dados_xml(novo, dados_caso)
+                    ref_element.addprevious(novo)
 
         # 5. Salva e retorna
         buffer = io.BytesIO()
         doc.save(buffer)
         buffer.seek(0)
 
-        participante = dados_caso.get("participante", "Participante").split()[0]
-        processo = dados_caso.get("processo", "").replace("/", "-").replace(".", "")[:15]
-        nome_arquivo = f"Parecer_{participante}_{processo}.docx".replace(" ", "_")
+        processo = dados_caso.get("processo", "sp").strip().replace("/", "-").replace(".", "-").replace(" ", "_")
+        nome_arquivo = f"{processo}_Parecer Técnico.rev001.docx"
 
         return send_file(
             buffer,
@@ -173,6 +180,16 @@ def gerar_parecer():
     except Exception as e:
         import traceback
         return jsonify({"erro": f"Erro ao gerar parecer: {str(e)}", "detalhe": traceback.format_exc()}), 500
+
+
+def _encontrar_placeholder_primeira_impugnacao(doc):
+    """Encontra o parágrafo com [inserir primeira impugnação] no template."""
+    for elem in doc.element.body:
+        if elem.tag == qn("w:p"):
+            texto = "".join(t.text or "" for t in elem.iter(qn("w:t")))
+            if "inserir primeira impugna" in texto.lower():
+                return elem
+    return None
 
 
 def _encontrar_ponto_insercao(doc):
@@ -226,8 +243,28 @@ def _baixar_docx(dbx, path):
 def _substituir_dados_doc(doc, dados_caso):
     """Substitui placeholders em todos os parágrafos do documento."""
     for p in doc.paragraphs:
-        for run in p.runs:
-            _substituir_texto_run(run, dados_caso)
+        # Trata parágrafos onde o placeholder está fragmentado entre runs
+        _consolidar_e_substituir(p, dados_caso)
+
+
+def _consolidar_e_substituir(p, dados_caso):
+    """Consolida texto do parágrafo, substitui placeholders e redistribui."""
+    texto_completo = p.text
+    mapeamento = _build_mapeamento(dados_caso)
+    precisa_substituir = any(ph in texto_completo for ph in mapeamento)
+    if not precisa_substituir:
+        return
+    # Substitui no texto completo
+    novo_texto = texto_completo
+    for ph, val in mapeamento.items():
+        novo_texto = novo_texto.replace(ph, val)
+    # Coloca tudo no primeiro run e limpa os demais
+    runs = p.runs
+    if not runs:
+        return
+    runs[0].text = novo_texto
+    for r in runs[1:]:
+        r.text = ""
 
 
 def _substituir_dados_xml(elemento, dados_caso):
@@ -248,22 +285,26 @@ def _substituir_texto_run(run, dados_caso):
 
 
 def _build_mapeamento(dados_caso):
-    return {
+    mapa = {
         "[demanda]":           dados_caso.get("demanda", ""),
         "[nº do processo]":    dados_caso.get("processo", ""),
         "[Autor/Reclamante]":  dados_caso.get("participante", ""),
         "[Vara/Juízo]":        dados_caso.get("vara", ""),
         "[data de entrega]":   dados_caso.get("entrega", ""),
     }
+    return {k: v for k, v in mapa.items() if v}
 
 
 @app.route("/api/status", methods=["GET"])
 def status():
+    refresh_token = os.environ.get("DROPBOX_REFRESH_TOKEN", "").strip()
+    app_key = os.environ.get("DROPBOX_APP_KEY", "").strip()
     token = os.environ.get("DROPBOX_TOKEN", "").strip()
+    dropbox_ok = bool((refresh_token and app_key) or token)
     template_ok = os.path.exists(TEMPLATE_PATH)
     return jsonify({
         "status": "ok",
-        "dropbox_configurado": bool(token),
+        "dropbox_configurado": dropbox_ok,
         "pasta": get_pasta(),
         "template_ok": template_ok
     })
