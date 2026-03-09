@@ -2,8 +2,9 @@
 Criador de Pareceres Atuariais - Backend
 """
 
-from flask import Flask, jsonify, request, send_file, send_from_directory
+from flask import Flask, jsonify, request, send_file, send_from_directory, session
 from flask_cors import CORS
+from functools import wraps
 import dropbox
 from dropbox.exceptions import AuthError, ApiError
 from docx import Document
@@ -26,10 +27,50 @@ def carregar_env():
 carregar_env()
 
 app = Flask(__name__)
-CORS(app)
+app.secret_key = os.environ.get("SECRET_KEY", "lumens-secret-2024")
+CORS(app, supports_credentials=True)
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("autenticado"):
+            return jsonify({"erro": "Nao autenticado."}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 # Caminho do template base (deve estar na mesma pasta que app.py)
 TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'template.docx')
+
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('autenticado'):
+            return jsonify({"erro": "Nao autenticado."}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.route("/api/login", methods=["POST"])
+def login():
+    data = request.json
+    senha = data.get("senha", "")
+    senha_correta = os.environ.get("APP_SENHA", "lumens2024")
+    if senha == senha_correta:
+        session['autenticado'] = True
+        return jsonify({"ok": True})
+    return jsonify({"erro": "Senha incorreta."}), 401
+
+
+@app.route("/api/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/check", methods=["GET"])
+def check_auth():
+    return jsonify({"autenticado": bool(session.get('autenticado'))})
 
 
 def get_dropbox_client():
@@ -74,6 +115,7 @@ def explorar():
 
 
 @app.route("/api/topicos", methods=["GET"])
+@login_required
 def listar_topicos():
     try:
         dbx = get_dropbox_client()
@@ -107,6 +149,7 @@ def listar_topicos():
 
 
 @app.route("/api/gerar", methods=["POST"])
+@login_required
 def gerar_parecer():
     data = request.json
     topicos_selecionados = data.get("topicos", [])
@@ -293,6 +336,23 @@ def _build_mapeamento(dados_caso):
         "[data de entrega]":   dados_caso.get("entrega", ""),
     }
     return {k: v for k, v in mapa.items() if v}
+
+
+@app.route("/api/login", methods=["POST"])
+def login():
+    data = request.json
+    senha = data.get("senha", "")
+    senha_correta = os.environ.get("APP_SENHA", "lumens2024")
+    if senha == senha_correta:
+        session["autenticado"] = True
+        return jsonify({"ok": True})
+    return jsonify({"erro": "Senha incorreta."}), 401
+
+
+@app.route("/api/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/status", methods=["GET"])
