@@ -222,7 +222,7 @@
       <label>Senha de acesso</label>
       <input type="password" id="login-senha" placeholder="Digite a senha" autocomplete="current-password">
     </div>
-    <div class="login-erro" id="login-erro">Senha incorreta. Tente novamente.</div>
+    <div class="login-erro" id="login-erro" style="display:none">Senha incorreta. Tente novamente.</div>
     <button class="btn-login" id="btn-login">Entrar</button>
   </div>
 </div>
@@ -281,32 +281,63 @@
 
 <script>
 const API = 'https://criador-de-pareceres.onrender.com';
+let todosTopicos = [], selecionados = [], dragSrc = null;
+
+// LOGIN
+async function verificarSessao() {
+  try {
+    const r = await fetch(API + '/api/check', { credentials: 'include' });
+    const d = await r.json();
+    if (d.autenticado) {
+      mostrarApp();
+    } else {
+      document.getElementById('login-screen').classList.add('show');
+    }
+  } catch {
+    document.getElementById('login-screen').classList.add('show');
+  }
+}
+
+function mostrarApp() {
+  document.getElementById('login-screen').classList.remove('show');
+  document.getElementById('app-content').classList.add('show');
+  checkStatus();
+  carregarTopicos();
+}
 
 async function fazerLogin() {
-  const senha = document.getElementById('login-senha').value;
+  const senha = document.getElementById('login-senha').value.trim();
   const erro = document.getElementById('login-erro');
-  if (!senha) { erro.textContent = 'Digite a senha.'; return; }
+  const btn = document.getElementById('btn-login');
+  erro.style.display = 'none';
+  if (!senha) return;
+  btn.disabled = true;
+  btn.textContent = 'Entrando...';
   try {
-    const r = await fetch(`${API}/api/login`, {
+    const r = await fetch(API + '/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ senha })
+      body: JSON.stringify({ senha: senha })
     });
     if (r.ok) {
-      document.getElementById('login-screen').classList.remove('show');
-      document.getElementById('app-content').classList.add('show');
-      checkStatus();
-      carregarTopicos();
+      mostrarApp();
     } else {
-      erro.textContent = 'Senha incorreta. Tente novamente.';
+      erro.style.display = 'block';
       document.getElementById('login-senha').value = '';
     }
   } catch {
-    erro.textContent = 'Erro de conexão. Verifique o servidor.';
+    erro.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Entrar';
   }
 }
-let todosTopicos = [], selecionados = [], dragSrc = null;
+
+document.getElementById('btn-login').addEventListener('click', fazerLogin);
+document.getElementById('login-senha').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') fazerLogin();
+});
 
 async function checkStatus() {
   try {
@@ -435,9 +466,7 @@ function showToast(msg, type='') {
   clearTimeout(t._t); t._t = setTimeout(() => t.className = '', 4000);
 }
 
-// Verifica se já tem sessão ativa
-(async () => { try { const r = await fetch(`${API}/api/status`, { credentials: 'include' }); const d = await r.json(); if (d.status === 'ok' && d.dropbox_configurado) { document.getElementById('login-screen').classList.remove('show');
-      document.getElementById('app-content').classList.add('show'); verificarSessao(); } } catch {} })();
+verificarSessao();
 </script>
 </body>
 </html>
