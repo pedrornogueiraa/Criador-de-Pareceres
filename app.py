@@ -235,16 +235,14 @@ def gerar_parecer():
         # Substituir placeholders da capa no template
         _substituir_dados(doc_final.element.body, dados_caso)
 
-        # Separar os tópicos em três grupos:
-        #   1. normais    → entram como subtópicos (cTTULONVEL1 + conteúdo)
-        #   2. principal  → "Cálculo Lumens": entra como tópico (cTTULONVEL1 de nível superior)
-        #   3. ultima_pag → "Anexo" / "Apêndice": sempre na última página
+        # Separar os tópicos em dois grupos:
+        #   1. normais    → entram antes do bloco de encerramento (assinatura)
+        #   2. ultima_pag → "Anexo" / "Apêndice": entram após a quebra de página do encerramento
         normais    = [t for t in topicos_selecionados if not t.get("ultima_pagina")]
         ultima_pag = [t for t in topicos_selecionados if t.get("ultima_pagina")]
 
-        # Encontrar ponto de inserção no template:
-        # O template tem um marcador "[inserir primeira impugnação]" ou
-        # usamos o segundo cTTULONVEL1 como ponto de inserção
+        # Ponto de inserção dos tópicos normais:
+        # sempre ANTES do bloco "É o Parecer Técnico." / assinatura
         ponto = _encontrar_ponto_insercao(doc_final)
 
         for topico in normais:
@@ -252,8 +250,10 @@ def gerar_parecer():
             _copiar_estilos(docx_topico, doc_final)
             eh_principal = topico.get("topico_principal", False)
             _inserir_topico(docx_topico, doc_final, dados_caso, ponto, eh_principal)
+            # Atualizar o ponto para inserir o próximo tópico após o anterior
+            ponto = None  # após o primeiro, inserir em sequência antes do encerramento
 
-        # Tópicos de última página: inseridos com quebra de página antes
+        # Tópicos de última página: inseridos APÓS a quebra de página do encerramento
         for topico in ultima_pag:
             docx_topico = _baixar_docx(dbx, topico["path"])
             _copiar_estilos(docx_topico, doc_final)
@@ -307,57 +307,121 @@ def _copiar_estilos(doc_origem, doc_destino):
 
 def _encontrar_ponto_insercao(doc):
     """
-    Retorna o elemento <w:p> que serve como ponto de inserção.
-    Procura o placeholder [inserir primeira impugnação]; se não achar,
-    usa o último elemento do body antes do sectPr.
+    Retorna o elemento que serve como ponto de inserção dos tópicos.
+    Procura o placeholder [inserir primeira impugnação].
+    Se não achar, usa o elemento imediatamente ANTES do bloco de encerramento
+    ("É o Parecer Técnico."), garantindo que os tópicos entrem antes da assinatura.
     """
     body = doc.element.body
+
+    # Prioridade 1: placeholder explícito
     for elem in body:
         for t in elem.iter(qn("w:t")):
             if t.text and "[inserir primeira impugna" in t.text:
                 return elem
-    # fallback: antes do sectPr
+
+    # Prioridade 2: elemento imediatamente antes de "É o Parecer Técnico."
+    children = list(body)
+    for i, elem in enumerate(children):
+        for t in elem.iter(qn("w:t")):
+            if t.text and "É o Parecer Técnico" in t.text:
+                # Retornar o elemento anterior como ponto de inserção
+                return children[i - 1] if i > 0 else elem
+
+    # Fallback: antes do sectPr
     sect_pr = body.find(qn("w:sectPr"))
     if sect_pr is not None:
-        children = list(body)
         idx = children.index(sect_pr)
         return children[idx - 1] if idx > 0 else None
     return None
 
 
+def _encontrar_inicio_encerramento(doc):
+    """
+    Retorna o índice do primeiro elemento do bloco de encerramento
+    (parágrafo vazio antes de "É o Parecer Técnico.", ou o próprio).
+    Usado para inserir tópicos ANTES desse bloco.
+    """
+    body     = doc.element.body
+    children = list(body)
+    for i, elem in enumerate(children):
+        for t in elem.iter(qn("w:t")):
+            if t.text and "É o Parecer Técnico" in t.text:
+                # Incluir parágrafo vazio imediatamente anterior se existir
+                if i > 0:
+                    prev_texts = [t.text for t in children[i-1].iter(qn("w:t")) if t.text]
+                    if not prev_texts:
+                        return i - 1
+                return i
+    return None
+
+
+def _encontrar_pos_encerramento(doc):
+    """
+    Retorna o índice do elemento APÓS o bloco completo de encerramento
+    (assinatura + quebra de página), que é onde Anexo/Apêndice do banco devem entrar.
+    O bloco de encerramento termina no elemento com pageBreak.
+    """
+    body     = doc.element.body
+    children = list(body)
+    # Achar o pageBreak que vem após a assinatura
+    em_encerramento = False
+    for i, elem in enumerate(children):
+        # Detectar início do encerramento
+        for t in elem.iter(qn("w:t")):
+            if t.text and "É o Parecer Técnico" in t.text:
+                em_encerramento = True
+        # Detectar quebra de página após o encerramento
+        if em_encerramento:
+            tem_page_break = any(
+                br.get(qn("w:type")) == "page"
+                for br in elem.iter(qn("w:br"))
+            )
+            if tem_page_break:
+                return i + 1  # posição APÓS a quebra
+    return None
+
+
 def _inserir_topico(doc_topico, doc_final, dados_caso, ponto_ref, eh_principal):
     """
-    Insere o conteúdo de doc_topico no doc_final após ponto_ref.
-    Se eh_principal=True, usa estilo cTTULONVEL1 (tópico).
-    Se eh_principal=False, usa estilo dTTULONVEL2 (subtópico).
+    Insere o conteúdo de doc_topico ANTES do bloco de encerramento
+    ("É o Parecer Técnico." + assinatura).
+    Se ponto_ref for o placeholder [inserir primeira impugnação], substitui-o.
+    Se ponto_ref for None, localiza automaticamente o início do encerramento.
     """
     body_origem  = doc_topico.element.body
     body_destino = doc_final.element.body
-    sect_pr      = body_destino.find(qn("w:sectPr"))
 
     elementos = [e for e in body_origem if e.tag != qn("w:sectPr")]
+    if not elementos:
+        return
 
-    if ponto_ref is not None and ponto_ref in list(body_destino):
-        pos = list(body_destino).index(ponto_ref)
-        # Verificar se o ponto_ref é o placeholder — nesse caso substituir
+    children = list(body_destino)
+
+    if ponto_ref is not None and ponto_ref in children:
+        pos = children.index(ponto_ref)
         placeholder_encontrado = any(
             "[inserir primeira impugna" in (t.text or "")
             for t in ponto_ref.iter(qn("w:t"))
         )
         if placeholder_encontrado:
-            # Substituir o parágrafo placeholder pelo primeiro elemento do tópico
             insert_pos = pos
             body_destino.remove(ponto_ref)
         else:
             insert_pos = pos + 1
     else:
-        # Inserir antes do sectPr
-        insert_pos = list(body_destino).index(sect_pr) if sect_pr is not None else len(list(body_destino))
+        # Inserir imediatamente antes do bloco de encerramento
+        idx_enc = _encontrar_inicio_encerramento(doc_final)
+        if idx_enc is not None:
+            insert_pos = idx_enc
+        else:
+            # fallback: antes do sectPr
+            sect_pr = body_destino.find(qn("w:sectPr"))
+            insert_pos = list(body_destino).index(sect_pr) if sect_pr is not None else len(list(body_destino))
 
     for i, elem in enumerate(elementos):
         novo = copy.deepcopy(elem)
         _substituir_dados(novo, dados_caso)
-        # Ajustar estilo do primeiro parágrafo que for título
         if i == 0:
             _ajustar_estilo_titulo(novo, eh_principal)
         body_destino.insert(insert_pos + i, novo)
@@ -384,35 +448,32 @@ def _ajustar_estilo_titulo(elem, eh_principal):
 
 def _inserir_ultima_pagina(doc_topico, doc_final, dados_caso):
     """
-    Insere o conteúdo com quebra de página antes, sempre ao final do documento.
-    Preserva os estilos originais do arquivo (sem alterar títulos).
+    Insere Anexo/Apêndice APÓS a quebra de página do bloco de encerramento
+    (assinatura), sempre ao final do documento — antes do sectPr.
+    Preserva os estilos originais do arquivo sem alteração.
     """
     body_origem  = doc_topico.element.body
     body_destino = doc_final.element.body
     sect_pr      = body_destino.find(qn("w:sectPr"))
 
-    def inserir(elem):
-        if sect_pr is not None:
-            body_destino.insert(list(body_destino).index(sect_pr), elem)
-        else:
-            body_destino.append(elem)
+    # Posição de inserção: após o pageBreak do encerramento, antes do sectPr
+    pos_enc = _encontrar_pos_encerramento(doc_final)
+    if pos_enc is None:
+        # fallback: antes do sectPr
+        children = list(body_destino)
+        pos_enc = children.index(sect_pr) if sect_pr is not None else len(children)
 
-    # Inserir quebra de página antes
-    p_quebra = OxmlElement("w:p")
-    r_quebra = OxmlElement("w:r")
-    br       = OxmlElement("w:br")
-    br.set(qn("w:type"), "page")
-    r_quebra.append(br)
-    p_quebra.append(r_quebra)
-    inserir(p_quebra)
+    def inserir_em(elem, offset):
+        body_destino.insert(pos_enc + offset, elem)
 
-    # Inserir conteúdo do arquivo com formatação original intacta
+    offset = 0
     for elem in body_origem:
         if elem.tag == qn("w:sectPr"):
             continue
         novo = copy.deepcopy(elem)
         _substituir_dados(novo, dados_caso)
-        inserir(novo)
+        inserir_em(novo, offset)
+        offset += 1
 
 
 def _substituir_dados(elemento, dados_caso):
