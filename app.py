@@ -415,28 +415,50 @@ def _inserir_topico(doc_topico, doc_final, dados_caso, ponto_ref, eh_principal):
 
 
 def _ajustar_estilo_titulo(elem, eh_principal):
+    """
+    Força o estilo do primeiro parágrafo do tópico:
+      - eh_principal=True  → cTTULONVEL1 (título nível 1, ex: "2 DO CÁLCULO DA PREVI")
+      - eh_principal=False → dTTULONVEL2 (subtítulo nível 2)
+    Aplica sempre, independente do estilo original do arquivo.
+    """
     pPr = elem.find(qn("w:pPr"))
     if pPr is None:
-        return
+        pPr = OxmlElement("w:pPr")
+        elem.insert(0, pPr)
     pStyle = pPr.find(qn("w:pStyle"))
     if pStyle is None:
-        return
-    estilo_atual = pStyle.get(qn("w:val"), "")
-    estilos_titulo = {"cTTULONVEL1", "dTTULONVEL2", "Heading1", "Heading2"}
-    if estilo_atual in estilos_titulo or "TTULO" in estilo_atual.upper():
-        pStyle.set(qn("w:val"), "cTTULONVEL1" if eh_principal else "dTTULONVEL2")
+        pStyle = OxmlElement("w:pStyle")
+        pPr.insert(0, pStyle)
+    pStyle.set(qn("w:val"), "cTTULONVEL1" if eh_principal else "dTTULONVEL2")
 
 
 def _inserir_ultima_pagina(doc_topico, doc_final, dados_caso):
+    """
+    Insere Anexo/Apêndice em página verdadeiramente separada,
+    usando uma quebra de seção (sectPr contínua + pageBreak) antes do conteúdo,
+    sempre ao final do documento antes do sectPr principal.
+    """
     body_origem  = doc_topico.element.body
     body_destino = doc_final.element.body
-    sect_pr      = body_destino.find(qn("w:sectPr"))
+    sect_pr_main = body_destino.find(qn("w:sectPr"))
 
+    # Posição de inserção: após o pageBreak do encerramento
     pos_enc = _encontrar_pos_encerramento(doc_final)
     if pos_enc is None:
         children = list(body_destino)
-        pos_enc  = children.index(sect_pr) if sect_pr is not None else len(children)
+        pos_enc  = children.index(sect_pr_main) if sect_pr_main is not None else len(children)
 
+    # Inserir parágrafo com quebra de página explícita antes do conteúdo
+    p_quebra = OxmlElement("w:p")
+    r_quebra = OxmlElement("w:r")
+    br_pg    = OxmlElement("w:br")
+    br_pg.set(qn("w:type"), "page")
+    r_quebra.append(br_pg)
+    p_quebra.append(r_quebra)
+    body_destino.insert(pos_enc, p_quebra)
+    pos_enc += 1
+
+    # Inserir conteúdo do Anexo/Apêndice com formatação original
     offset = 0
     for elem in body_origem:
         if elem.tag == qn("w:sectPr"):
