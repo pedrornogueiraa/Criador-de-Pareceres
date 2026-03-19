@@ -170,9 +170,10 @@ textarea{resize:vertical;min-height:60px;}
       </div>
       <div class="panel-body">
         <div class="field"><label>Número do Processo</label><input type="text" id="processo" placeholder="0000000-00.0000.0.00.0000"></div>
+        <div class="field"><label>Dossiê</label><input type="text" id="dossie" placeholder=""></div>
         <div class="field"><label>Vara / Juízo</label><input type="text" id="vara" placeholder="Ex: 3ª Vara do Trabalho de Curitiba"></div>
         <div class="field"><label>Autor / Reclamante</label><input type="text" id="participante" placeholder="Nome completo"></div>
-        <div class="field"><label>Demanda / Objeto</label><textarea id="demanda" placeholder="Descreva resumidamente a demanda..."></textarea></div>
+        <div class="field"><label>Demanda / Objeto</label><textarea id="demanda"></textarea></div>
         <div class="field"><label>Data de Entrega</label><input type="text" id="entrega" placeholder="Ex: 01 de março de 2026"></div>
       </div>
     </div>
@@ -364,12 +365,13 @@ function renderColuna(tipo, lista, filtro) {
 
     const g   = document.createElement('div'); g.className='categoria-group';
     const lbl = document.createElement('div');
-    // Grupos SEMPRE fechados por padrão (collapsed), exceto durante busca
-    lbl.className = 'categoria-label' + (filtro ? '' : ' collapsed');
+    // Estrutura: fechado por padrão. Banco de Teses: aberto por padrão.
+    const fechado = (tipo === 'estrutura' && !filtro) || inativos;
+    lbl.className = 'categoria-label' + (fechado ? ' collapsed' : '');
     lbl.innerHTML = '<span class="cat-arrow">▾</span> '+label+' <span class="cat-count">'+items.length+'</span>';
 
     const lst = document.createElement('div');
-    lst.className = 'topicos-list' + (filtro ? '' : ' hidden');
+    lst.className = 'topicos-list' + (fechado ? ' hidden' : '');
     lbl.onclick = () => { lbl.classList.toggle('collapsed'); lst.classList.toggle('hidden'); };
 
     items.forEach(t => {
@@ -499,6 +501,7 @@ function renderSelecionados() {
 document.getElementById('btn-gerar').addEventListener('click', async function() {
   const dados = {
     processo:     document.getElementById('processo').value,
+    dossie:       document.getElementById('dossie').value,
     vara:         document.getElementById('vara').value,
     participante: document.getElementById('participante').value,
     demanda:      document.getElementById('demanda').value,

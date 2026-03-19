@@ -451,6 +451,7 @@ def _substituir_dados(elemento, dados_caso):
     mapeamento = {
         "[demanda]":          dados_caso.get("demanda", ""),
         "[nº do processo]":   dados_caso.get("processo", ""),
+        "[dossiê]":           dados_caso.get("dossie", ""),
         "[Autor/Reclamante]": dados_caso.get("participante", ""),
         "[Vara/Juízo]":       dados_caso.get("vara", ""),
         "[data de entrega]":  dados_caso.get("entrega", ""),
